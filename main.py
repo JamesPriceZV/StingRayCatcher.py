@@ -301,6 +301,28 @@ def plot_map(sites: List[CellSite], out_path: str, auto_open: bool = True) -> st
     if not sites:
         raise ValueError("No sites to plot")
 
+    # Normalize colors to Folium's accepted palette to avoid warnings.
+    # Maps common synonyms to the closest Folium-supported color.
+    _FOLIUM_COLORS = {
+        "pink", "cadetblue", "gray", "darkgreen", "lightblue", "blue", "darkpurple",
+        "red", "green", "lightred", "purple", "lightgray", "darkblue", "lightgreen",
+        "beige", "darkred", "white", "black", "orange"
+    }
+    _COLOR_ALIASES = {
+        "magenta": "pink",  # T-Mobile often shown as magenta
+        "fuchsia": "pink",
+        "grey": "gray",
+        "lime": "lightgreen",
+        "navy": "darkblue",
+        "maroon": "darkred",
+    }
+    def _normalize_folium_color(value: str) -> str:
+        if not value:
+            return "gray"
+        v = value.strip().lower()
+        v = _COLOR_ALIASES.get(v, v)
+        return v if v in _FOLIUM_COLORS else "gray"
+
     center_lat = sum(s.lat for s in sites) / len(sites)
     center_lon = sum(s.lon for s in sites) / len(sites)
     m = folium.Map(location=[center_lat, center_lon], zoom_start=13, control_scale=True)
@@ -317,7 +339,7 @@ def plot_map(sites: List[CellSite], out_path: str, auto_open: bool = True) -> st
         folium.Marker(
             location=[s.lat, s.lon],
             popup=popup,
-            icon=folium.Icon(color=color, icon=icon),
+            icon=folium.Icon(color=_normalize_folium_color(color), icon=icon),
             tooltip=(s.operator or "Unknown") + (" (SIMULATOR?)" if s.suspected_simulator else ""),
         ).add_to(cluster)
 

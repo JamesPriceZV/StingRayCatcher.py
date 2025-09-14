@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3c7a8c42-d1e3-4880-9a1a-8f1346a682af" name="Changes" comment="V1.0 - Initial code base">
+    <list default="true" id="3c7a8c42-d1e3-4880-9a1a-8f1346a682af" name="Changes" comment="v1.5 - Added live connection to iPhone.&#10;&#10;1.0 - Initial code base">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
@@ -54,7 +54,7 @@
     "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "main",
     "junie.onboarding.icon.badge.shown": "true",
-    "settings.editor.selected.configurable": "preferences.toDoOptions",
+    "settings.editor.selected.configurable": "com.free.deep.mycode.settings.CodeAssistSettingsConfigurable",
     "to.speed.mode.migration.done": "true"
   }
 }]]></component>
@@ -95,7 +95,15 @@
       <option name="project" value="LOCAL" />
       <updated>1757874429903</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="v1.5 - Added live connection to iPhone.&#10;&#10;1.0 - Initial code base">
+      <option name="closed" value="true" />
+      <created>1757876715398</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1757876715398</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="UpdateCopyrightCheckinHandler">
@@ -107,14 +115,15 @@
     <option name="CHECK_CODE_CLEANUP_BEFORE_PROJECT_COMMIT_PROFILE" value="Project Default" />
     <MESSAGE value="Initial Commit" />
     <MESSAGE value="V1.0 - Initial code base" />
-    <option name="LAST_COMMIT_MESSAGE" value="V1.0 - Initial code base" />
+    <MESSAGE value="v1.5 - Added live connection to iPhone.&#10;&#10;1.0 - Initial code base" />
+    <option name="LAST_COMMIT_MESSAGE" value="v1.5 - Added live connection to iPhone.&#10;&#10;1.0 - Initial code base" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/main.py</url>
-          <line>346</line>
+          <line>368</line>
           <option name="timeStamp" value="1" />
         </line-breakpoint>
       </breakpoints>
