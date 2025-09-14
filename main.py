@@ -12,6 +12,7 @@ Usage examples:
 - Import CSV:      python main.py --csv my_cells.csv
 - Import JSON:     python main.py --json my_cells.json
 - Set output path: python main.py --demo --out output/map.html
+- Web UI:          python main.py --web
 
 CSV expected headers (case-insensitive; unknowns can be blank):
   lat, lon, operator, mcc, mnc, lac, tac, cid, pci, arfcn, rsrp, rsrq, rssi, band, timestamp
@@ -34,14 +35,22 @@ import subprocess
 import sys
 import webbrowser
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import List, Dict, Any, Optional, Tuple
+
+# Optional web UI dependencies
+try:
+    from flask import Flask, jsonify, request
+except ImportError:  # pragma: no cover
+    Flask = None  # type: ignore
+    jsonify = None  # type: ignore
+    request = None  # type: ignore
 
 # Lazy import folium with a clear message if missing
 try:
     import folium  # type: ignore
     from folium.plugins import MarkerCluster  # type: ignore
-except Exception as e:  # pragma: no cover
+except ImportError:  # pragma: no cover
     folium = None  # type: ignore
     MarkerCluster = None  # type: ignore
 
@@ -148,58 +157,65 @@ def try_read_iphone_info() -> Dict[str, str]:
     return info
 
 
+def _parse_row(row: Dict[str, Any]) -> Optional[CellSite]:
+    """Helper to parse a dict (from CSV or JSON) into a CellSite."""
+    def g(key: str, default: Any = None) -> Any:
+        for k, v in row.items():
+            if k.lower() == key.lower():
+                return v
+        return default
+
+    def g_float(key: str) -> Optional[float]:
+        v = g(key)
+        if v is None or v == '':
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    def g_int(key: str) -> Optional[int]:
+        v = g(key)
+        if v is None or v == '':
+            return None
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return None
+
+    lat = g_float("lat")
+    lon = g_float("lon")
+    if lat is None or lon is None:
+        return None
+
+    return CellSite(
+        lat=lat,
+        lon=lon,
+        operator=g("operator"),
+        mcc=g_int("mcc"),
+        mnc=g_int("mnc"),
+        lac=g_int("lac"),
+        tac=g_int("tac"),
+        cid=g_int("cid"),
+        pci=g_int("pci"),
+        arfcn=g_int("arfcn"),
+        band=g("band"),
+        rsrp=g_float("rsrp"),
+        rsrq=g_float("rsrq"),
+        rssi=g_float("rssi"),
+        timestamp=g("timestamp"),
+        reasons=[],
+    )
+
+
 def load_cells_from_csv(path: str) -> List[CellSite]:
     sites: List[CellSite] = []
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            def gi(name: str) -> Optional[str]:
-                # get case-insensitive
-                for k, v in row.items():
-                    if k.lower() == name:
-                        return v
-                return None
-
-            def gi_num(name: str) -> Optional[int]:
-                v = gi(name)
-                if v is None or v == "":
-                    return None
-                try:
-                    return int(float(v))
-                except Exception:
-                    return None
-            def gi_float(name: str) -> Optional[float]:
-                v = gi(name)
-                if v is None or v == "":
-                    return None
-                try:
-                    return float(v)
-                except Exception:
-                    return None
-
-            lat = gi_float("lat")
-            lon = gi_float("lon")
-            if lat is None or lon is None:
-                continue
-            site = CellSite(
-                lat=lat,
-                lon=lon,
-                operator=gi("operator"),
-                mcc=gi_num("mcc"),
-                mnc=gi_num("mnc"),
-                lac=gi_num("lac"),
-                tac=gi_num("tac"),
-                cid=gi_num("cid"),
-                pci=gi_num("pci"),
-                arfcn=gi_num("arfcn"),
-                band=gi("band"),
-                rsrp=gi_float("rsrp"),
-                rsrq=gi_float("rsrq"),
-                rssi=gi_float("rssi"),
-                timestamp=gi("timestamp"),
-                reasons=[],
-            )
-            sites.append(site)
+            site = _parse_row(row)
+            if site:
+                sites.append(site)
     return sites
 
 
@@ -208,48 +224,9 @@ def load_cells_from_json(path: str) -> List[CellSite]:
         data = json.load(f)
     sites: List[CellSite] = []
     for item in data:
-        def gv(name: str):
-            for k, v in item.items():
-                if k.lower() == name:
-                    return v
-            return None
-        def gint(name: str) -> Optional[int]:
-            v = gv(name)
-            try:
-                return None if v is None or v == "" else int(v)
-            except Exception:
-                try:
-                    return int(float(v))
-                except Exception:
-                    return None
-        def gfloat(name: str) -> Optional[float]:
-            v = gv(name)
-            try:
-                return None if v is None or v == "" else float(v)
-            except Exception:
-                return None
-        lat = gfloat("lat")
-        lon = gfloat("lon")
-        if lat is None or lon is None:
-            continue
-        sites.append(CellSite(
-            lat=lat,
-            lon=lon,
-            operator=gv("operator"),
-            mcc=gint("mcc"),
-            mnc=gint("mnc"),
-            lac=gint("lac"),
-            tac=gint("tac"),
-            cid=gint("cid"),
-            pci=gint("pci"),
-            arfcn=gint("arfcn"),
-            band=str(gv("band")) if gv("band") is not None else None,
-            rsrp=gfloat("rsrp"),
-            rsrq=gfloat("rsrq"),
-            rssi=gfloat("rssi"),
-            timestamp=str(gv("timestamp")) if gv("timestamp") is not None else None,
-            reasons=[],
-        ))
+        site = _parse_row(item)
+        if site:
+            sites.append(site)
     return sites
 
 
@@ -259,27 +236,14 @@ def normalize_operator(site: CellSite) -> None:
         site.operator = US_OPERATOR_BY_MCC_MNC.get((site.mcc, site.mnc))
 
 
-def classify_sites(sites: List[CellSite], ref_point: Optional[Tuple[float, float]] = None) -> None:
-    """Mark suspected simulators based on simple heuristics.
-    Heuristics (coarse, extend as needed):
-      - Operator missing and MCC/MNC unknown => suspect.
-      - MCC/MNC pair maps to a different operator name than provided => suspect.
-      - Unusually strong signal (RSRP > -65 dBm or RSSI > -50 dBm) with very close cluster of IDs => suspect.
-      - TAC/LAC/CID values in very low ranges (<= 1) => suspect.
-    """
+def classify_sites(sites: List[CellSite]) -> None:
+    """Mark suspected simulators based on simple heuristics."""
     # Normalize operators
     for s in sites:
         normalize_operator(s)
         s.reasons = s.reasons or []
 
-    # Map of approximate clusters by location to analyze density
-    # Compute centroid if ref not given
-    if not ref_point and sites:
-        lat_avg = sum(s.lat for s in sites) / len(sites)
-        lon_avg = sum(s.lon for s in sites) / len(sites)
-        ref_point = (lat_avg, lon_avg)
-
-    # Group by operator for color coding
+    # Heuristics for individual sites
     for s in sites:
         # Heuristic: missing operator and MCC/MNC unknown
         if not s.operator and (s.mcc is None or s.mnc is None):
@@ -295,29 +259,29 @@ def classify_sites(sites: List[CellSite], ref_point: Optional[Tuple[float, float
 
         # Heuristic: Abnormally strong signal
         strong = (s.rsrp is not None and s.rsrp > -65) or (s.rssi is not None and s.rssi > -50)
-        if strong:
+        if strong and "Unusually strong signal strength" not in s.reasons:
             s.suspected_simulator = True
             s.reasons.append("Unusually strong signal strength")
 
         # Heuristic: Low codes
         if (s.tac is not None and s.tac <= 1) or (s.lac is not None and s.lac <= 1) or (s.cid is not None and s.cid <= 1):
-            s.suspected_simulator = True
-            s.reasons.append("Low TAC/LAC/CID values")
+            if "Low TAC/LAC/CID values" not in s.reasons:
+                s.suspected_simulator = True
+                s.reasons.append("Low TAC/LAC/CID values")
 
-    # Heuristic: high density cluster within ~50 meters with multiple different PCIs for same operator -> suspect cluster
-    # Build simple grid
+    # Heuristic: high density cluster
     grid: Dict[Tuple[int, int], List[int]] = {}
     for idx, s in enumerate(sites):
-        key = (int(s.lat * 200), int(s.lon * 200))  # ~0.005 deg ~ 550 m; scaled to get ~50-100 m buckets depending on latitude
+        key = (int(s.lat * 200), int(s.lon * 200))
         grid.setdefault(key, []).append(idx)
     for bucket, indices in grid.items():
         if len(indices) >= 4:
-            # If at least 4 cells in tiny area, flag those with strongest power
             local = [sites[i] for i in indices]
             local.sort(key=lambda x: (x.rsrp or -200), reverse=True)
             for s in local[:2]:
-                s.suspected_simulator = True
-                s.reasons.append("Dense cluster with strong power")
+                if "Dense cluster with strong power" not in s.reasons:
+                    s.suspected_simulator = True
+                    s.reasons.append("Dense cluster with strong power")
 
 
 def carrier_color(carrier: Optional[str]) -> str:
@@ -357,14 +321,14 @@ def plot_map(sites: List[CellSite], out_path: str, auto_open: bool = True) -> st
             tooltip=(s.operator or "Unknown") + (" (SIMULATOR?)" if s.suspected_simulator else ""),
         ).add_to(cluster)
 
-    # Add a legend
     legend_html = """
-    <div style="position: fixed; bottom: 50px; left: 50px; z-index: 9999; background: white; padding: 10px; border: 1px solid #444;">
+    <div style="position: fixed; bottom: 50px; left: 50px; z-index: 9999; background: white; padding: 10px; border: 1px solid #444; border-radius: 5px;">
       <b>Legend</b><br>
       <span style="color: blue;">■</span> AT&T<br>
       <span style="color: red;">■</span> Verizon<br>
       <span style="color: magenta;">■</span> T-Mobile<br>
       <span style="color: green;">■</span> US Cellular<br>
+      <span style="color: gray;">■</span> Other<br>
       <span style="color: black;">■</span> Suspected Simulator
     </div>
     """
@@ -382,12 +346,12 @@ def plot_map(sites: List[CellSite], out_path: str, auto_open: bool = True) -> st
 
 
 def demo_sites(center_lat: float = 40.7580, center_lon: float = -73.9855) -> List[CellSite]:
-    random.seed(42)
+    random.seed(int(datetime.now().timestamp()))
     sites: List[CellSite] = []
     carriers = ["AT&T", "Verizon", "T-Mobile"]
-    for i in range(12):
-        dlat = random.uniform(-0.01, 0.01)
-        dlon = random.uniform(-0.01, 0.01)
+    for i in range(50):
+        dlat = random.uniform(-0.05, 0.05)
+        dlon = random.uniform(-0.05, 0.05)
         op = random.choice(carriers)
         rsrp = random.uniform(-120, -70)
         sites.append(CellSite(
@@ -404,7 +368,7 @@ def demo_sites(center_lat: float = 40.7580, center_lon: float = -73.9855) -> Lis
             rsrp=rsrp,
             rsrq=random.uniform(-20, -3),
             rssi=rsrp + random.uniform(20, 40),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             reasons=[],
         ))
     # Add a suspected simulator cluster
@@ -425,11 +389,250 @@ def demo_sites(center_lat: float = 40.7580, center_lon: float = -73.9855) -> Lis
             rsrp=random.uniform(-60, -45),  # very strong
             rsrq=random.uniform(-8, -2),
             rssi=random.uniform(-45, -30),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             reasons=[],
         ))
-    classify_sites(sites)
     return sites
+
+
+# ---------- Web UI state and helpers ----------
+ALL_SITES: List[CellSite] = []
+LAST_REFRESH: Optional[str] = None
+IPHONE_INFO: Dict[str, str] = {}
+DATA_SOURCE: Dict[str, Any] = {
+    'mode': None,
+    'path': None,
+    'center': None,
+}
+
+def sites_to_json(sites: List[CellSite]) -> List[Dict[str, Any]]:
+    return [asdict(s) for s in sites]
+
+
+def refresh_data(source: Dict[str, Any]) -> None:
+    global ALL_SITES, LAST_REFRESH, IPHONE_INFO
+    try:
+        IPHONE_INFO = try_read_iphone_info()
+    except Exception:
+        IPHONE_INFO = {}
+
+    mode = source.get('mode')
+    new_sites: List[CellSite] = []
+    if mode == 'csv' and source.get('path'):
+        path = str(source['path'])
+        if os.path.exists(path):
+            new_sites = load_cells_from_csv(path)
+    elif mode == 'json' and source.get('path'):
+        path = str(source['path'])
+        if os.path.exists(path):
+            new_sites = load_cells_from_json(path)
+    else: # demo mode
+        center = source.get('center') or (40.7580, -73.9855)
+        lat, lon = center
+        # jitter center a bit to simulate movement on refresh
+        lat += random.uniform(-0.0005, 0.0005)
+        lon += random.uniform(-0.0005, 0.0005)
+        new_sites = demo_sites(lat, lon)
+        source['center'] = (lat, lon)
+
+    if new_sites:
+        classify_sites(new_sites)
+        ALL_SITES = new_sites
+        LAST_REFRESH = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def build_index_html() -> str:
+    # Self-contained Leaflet UI with interactive filtering and refresh
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8' />
+  <title>StingRayCatcher Web UI</title>
+  <meta name='viewport' content='width=device-width, initial-scale=1' />
+  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
+  <style>
+    body {{ margin:0; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; }}
+    #topbar {{ padding: 8px 12px; background: #f5f5f7; border-bottom: 1px solid #ddd; display:flex; gap:15px; align-items:center; flex-wrap:wrap; }}
+    #map {{ flex: 1; }}
+    .badge {{ padding:2px 6px; border-radius:4px; background:#eee; }}
+    .sim {{ background:#000; color:#fff; }}
+    .control-group {{ display: flex; align-items: center; gap: 8px; }}
+    #iphone-status {{ font-size: 0.9em; color: #555; }}
+  </style>
+</head>
+<body>
+  <div id='topbar'>
+    <div class='control-group'>
+        <button id='refreshBtn'>Refresh</button>
+        <label><input type='checkbox' id='autoToggle'/>Auto</label>
+        <input id='intervalInput' type='number' min='2' value='10' style='width:50px'/>s
+    </div>
+    <div class='control-group'>
+        <label for='distSlider'>Radius:</label>
+        <input type='range' id='distSlider' min='1' max='50' value='50' style='width:100px'>
+        <span id='distLabel'>All</span>
+    </div>
+    <div id='status' style='font-size: 0.9em;'></div>
+    <div style='flex:1'></div>
+    <div id='iphone-status'>Checking for iPhone...</div>
+  </div>
+  <div id='map'></div>
+  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+  <script>
+    let map, layer, allSites = [];
+    const carrierColors = {{'AT&T':'blue','Verizon':'red','T-Mobile':'magenta','US Cellular':'green'}};
+    const defaultColor = '{DEFAULT_COLOR}';
+
+    function carrierColor(op) {{
+      if (!op) return defaultColor;
+      const key = typeof op === 'string' ? op.toLowerCase() : '';
+      for (const k in carrierColors) {{ if (k.toLowerCase()===key) return carrierColors[k]; }}
+      return defaultColor;
+    }}
+
+    function initMap() {{
+      map = L.map('map').setView([40.7580, -73.9855], 13);
+      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }}).addTo(map);
+      layer = L.layerGroup().addTo(map);
+      map.on('moveend', renderMarkers);
+      loadData(true);
+    }}
+
+    function renderMarkers() {{
+        layer.clearLayers();
+        const center = map.getCenter();
+        const maxDistKm = document.getElementById('distSlider').value;
+        const showAll = maxDistKm >= 50;
+
+        allSites.forEach(s => {{
+            const dist = map.distance(center, [s.lat, s.lon]) / 1000;
+            if (!showAll && dist > maxDistKm) return;
+
+            const color = s.suspected_simulator ? 'black' : carrierColor(s.operator);
+            const marker = L.circleMarker([s.lat, s.lon], {{ radius: 8, color: color, fillColor: color, fillOpacity: 0.8 }});
+            const lines = [];
+            for (const k in s) {{ if (s[k]!==null && k!=='reasons' && s[k]!=='') lines.push(`<b>${{k}}</b>: ${{s[k]}}`); }}
+            if (s.suspected_simulator) {{ lines.push('<b>Flagged</b>: Potential simulator'); if (s.reasons&&s.reasons.length) lines.push('Reasons: '+s.reasons.join('; ')); }}
+            marker.bindPopup(lines.join('<br/>'));
+            marker.addTo(layer);
+        }});
+    }}
+
+    async function loadIphone() {{
+      const iphoneEl = document.getElementById('iphone-status');
+      try {{
+        const r = await fetch('/iphone');
+        const j = await r.json();
+        const parts = [];
+        if (j.ProductType) parts.push(j.ProductType);
+        if (j.SubscriberCarrierNetwork) parts.push(j.SubscriberCarrierNetwork);
+        iphoneEl.textContent = parts.length ? '📱 ' + parts.join(' | ') : 'iPhone not found.';
+      }} catch(e) {{ iphoneEl.textContent = 'iPhone check failed.'; }}
+    }}
+
+    async function loadData(fit=false) {{
+      const status = document.getElementById('status');
+      status.textContent = 'Loading...';
+      try {{
+        const r = await fetch('/data');
+        const j = await r.json();
+        allSites = j.sites;
+        const latlngs = allSites.map(s => [s.lat, s.lon]).filter(Boolean);
+
+        if (fit && latlngs.length) {{ map.fitBounds(latlngs, {{padding:[50,50]}}); }}
+        renderMarkers();
+        status.textContent = `Source: ${{j.source}} | Last refresh: ${{j.last_refresh || 'n/a'}} | Sites: ${{allSites.length}}`;
+      }} catch(e) {{
+        status.textContent = 'Error loading data.';
+      }}
+      loadIphone();
+    }}
+
+    async function doRefresh() {{
+      try {{ await fetch('/refresh', {{method:'POST'}}); }} catch(e) {{}}
+      await loadData();
+    }}
+
+    let timer = null;
+    function updateAuto() {{
+      const on = document.getElementById('autoToggle').checked;
+      const iv = Math.max(2, parseInt(document.getElementById('intervalInput').value||'10',10));
+      if (timer) {{ clearInterval(timer); timer = null; }}
+      if (on) {{ timer = setInterval(doRefresh, iv*1000); }}
+    }}
+
+    document.addEventListener('DOMContentLoaded', () => {{
+      initMap();
+      document.getElementById('refreshBtn').addEventListener('click', doRefresh);
+      document.getElementById('autoToggle').addEventListener('change', updateAuto);
+      document.getElementById('intervalInput').addEventListener('change', updateAuto);
+      const distSlider = document.getElementById('distSlider');
+      const distLabel = document.getElementById('distLabel');
+      distSlider.addEventListener('input', () => {{
+        distLabel.textContent = distSlider.value >= 50 ? 'All' : `${{distSlider.value}} km`;
+      }});
+      distSlider.addEventListener('change', renderMarkers);
+    }});
+  </script>
+</body>
+</html>
+"""
+
+
+def start_web_server(args: argparse.Namespace) -> int:
+    if Flask is None:
+        print('The web UI requires Flask. Install with: pip install flask', file=sys.stderr)
+        return 2
+    app = Flask(__name__)
+
+    # Initialize data source from args
+    if args.csv:
+        DATA_SOURCE['mode'] = 'csv'; DATA_SOURCE['path'] = args.csv
+    elif args.json:
+        DATA_SOURCE['mode'] = 'json'; DATA_SOURCE['path'] = args.json
+    else:
+        DATA_SOURCE['mode'] = 'demo'
+        if args.center_lat is not None and args.center_lon is not None:
+            DATA_SOURCE['center'] = (args.center_lat, args.center_lon)
+
+    refresh_data(DATA_SOURCE)
+
+    @app.get('/')
+    def index():  # type: ignore
+        return build_index_html()
+
+    @app.get('/data')
+    def data():  # type: ignore
+        return jsonify({
+            'sites': sites_to_json(ALL_SITES),
+            'last_refresh': LAST_REFRESH,
+            'source': DATA_SOURCE.get('mode'),
+        })
+
+    @app.get('/iphone')
+    def iphone():  # type: ignore
+        return jsonify(IPHONE_INFO)
+
+    @app.post('/refresh')
+    def refresh():  # type: ignore
+        refresh_data(DATA_SOURCE)
+        return jsonify({'ok': True, 'last_refresh': LAST_REFRESH})
+
+    host = '127.0.0.1'
+    port = getattr(args, 'port', 5000)
+    url = f"http://{host}:{port}"
+    print(f"Web UI running at {url}  (Press CTRL+C to stop)")
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass # Fail silently if browser can't be opened
+
+    try:
+        app.run(host=host, port=int(port), debug=False)
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -438,25 +641,31 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     gsrc.add_argument("--demo", action="store_true", help="Run with demo data")
     gsrc.add_argument("--csv", type=str, help="Load cell data from CSV")
     gsrc.add_argument("--json", type=str, help="Load cell data from JSON")
-    p.add_argument("--out", type=str, default="cell_map.html", help="Output HTML map path")
-    p.add_argument("--no-open", action="store_true", help="Do not auto-open the map in a browser")
+    p.add_argument("--out", type=str, default="cell_map.html", help="Output HTML map path (CLI mode)")
+    p.add_argument("--no-open", action="store_true", help="Do not auto-open the map in a browser (CLI mode)")
     p.add_argument("--center-lat", type=float, help="Demo: center latitude")
     p.add_argument("--center-lon", type=float, help="Demo: center longitude")
     p.add_argument("--no-iphone", action="store_true", help="Skip iPhone info probe even if tools are present")
+    p.add_argument("--web", action="store_true", help="Start local web UI (http://127.0.0.1:5000)")
+    p.add_argument("--port", type=int, default=5000, help="Web UI port")
     return p.parse_args(argv)
 
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
 
-    # Optional: probe iPhone info
+    # Web UI mode
+    if getattr(args, 'web', False):
+        return start_web_server(args)
+
+    # CLI mode behavior
     if not args.no_iphone:
         info = try_read_iphone_info()
         if info:
             print("Connected iPhone (best-effort info):")
             for k, v in info.items():
                 print(f"  {k}: {v}")
-            print("Note: iOS does not expose live cell tower lists to third-party tools over USB. Import data via --csv/--json.")
+            print("\nNote: iOS does not expose live cell tower lists to third-party tools over USB.")
         else:
             print("No iPhone info available. To enable, install libimobiledevice: brew install libimobiledevice")
 
@@ -467,9 +676,8 @@ def main(argv: List[str]) -> int:
     elif args.json:
         sites = load_cells_from_json(args.json)
     else:
-        # default to demo if nothing provided
         if not args.demo:
-            print("No input provided. Running demo. Use --csv/--json to load your own data.")
+            print("No input provided. Running demo. Use --csv/--json to load your own data, or --web for the UI.")
         lat = args.center_lat if args.center_lat is not None else 40.7580
         lon = args.center_lon if args.center_lon is not None else -73.9855
         sites = demo_sites(lat, lon)
@@ -478,7 +686,6 @@ def main(argv: List[str]) -> int:
         print("No sites loaded. Nothing to plot.")
         return 1
 
-    # Classify if not already
     classify_sites(sites)
 
     auto_open = not args.no_open
